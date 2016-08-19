@@ -1,18 +1,29 @@
 <?php
 
-/**
- * TeamSpeak 3 Security Bot
- * @author CRDF FRANCE
- * @since August 2016
- * @license Attribution-NonCommercial 3.0 United States (CC BY-NC 3.0 US) http://creativecommons.org/licenses/by-nc/3.0/us/
- * @copyright www.crdf.fr / copyright (C) CRDF FRANCE 2016
- */
-
 $path = dirname(__FILE__) . '/';
 
 $nickNames = array(
     "fuck",
-    "noob"
+    "noob",
+    "connard",
+    "fdp",
+    "pute",
+    "mère",
+    "père",
+    "abruti",
+    "débile",
+    "crétin",
+    "idiot",
+    "bite",
+    "grosse",
+    "fils",
+    "enculé"
+);
+
+$adminID = array(
+    10,
+    6,
+    32
 );
 
 $fp = fsockopen("127.0.0.1", 10011, $errno, $errstr, 0.1);
@@ -20,11 +31,92 @@ stream_set_timeout($fp, 0, 100000);
 
 if($fp)
 {
-    send("login <SERVERADMIN> <PASSWORD>");
-    send("use sid=<SERVERID>");
-    send("clientupdate client_nickname=<BOTNAME>");
+    send("login <SERVER_ADMIN> <PASSWORD>");
+    send("use sid=<SERVER_ID>");
+    send("clientupdate client_nickname=<CLIENT_NICKNAME>");
 
-    send("clientlist -ip -times");
+    // Mise à jour de la base de données alloclist
+    $currentDate    = date('dmY');
+    if(file_exists($path . '/' . 'update.txt'))
+    {
+        $updateArray    = file($path . '/' . 'update.txt');
+        $dateUpdate     = trim($updateArray[0]);
+
+        if($dateUpdate != $currentDate)
+        {
+            $alloclistDownload = file_get_contents('http://ftp.ripe.net/ripe/stats/membership/alloclist.txt');
+            if($alloclistDownload)
+            {
+                $alloclistFilename = $path . "alloclist.txt";
+
+                if(file_exists($alloclistFilename))
+                {
+                    unlink($alloclistFilename);
+                } else
+                {
+                    send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Aucune base de données alloclist trouvée. Erreur dans la procédure."));
+                }
+
+                $file = fopen($alloclistFilename, "w");
+                fputs($file, $alloclistDownload);
+                fclose($file);
+
+                if(file_exists($alloclistFilename))
+                {
+                    //send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Base de données alloclist mise à jour avec succès."));
+                }
+            } else
+            {
+                //send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Erreur dans le téléchargement de la base de données du 'alloclist'. Mise à jour impossible."));
+            }
+
+            $file = fopen($path . '/' . 'update.txt', "w");
+            fputs($file, $currentDate);
+            fclose($file);
+
+            //send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Maintenance journalière terminée."));
+        }
+    } else
+    {
+        $file = fopen($path . '/' . 'update.txt', "w");
+        fputs($file, $currentDate);
+        fclose($file);
+    }
+
+    // Traitement des requêtes serveurs
+    send("serverinfo");
+
+    $clientList = null;
+    while ($line = fgets($fp))
+    {
+            $clientList .= $line;
+    }
+
+    $clientList         = strstr($clientList, "error id=0 msg=ok");
+    $clientList         = trim(str_replace(array('error id=0 msg=ok'), "", $clientList));
+    $clientsArray       = explode("|", $clientList);
+
+    $server = null;
+    foreach ($clientsArray as $line)
+    {
+        $lineArray = explode(" ", $line);
+
+        $tableTemp = array();
+        foreach ($lineArray as $txt)
+        {
+            $var        = strstr($txt, '=', true);
+            $value      = substr(strstr($txt, '=', false), 1);
+
+            $tableTemp[trim($var)] = trim($value);
+        }
+
+        $server = $tableTemp;
+
+        unset($tableTemp, $var, $value);
+    }
+
+    // Traitement des clients
+    send("clientlist -ip -times -groups -info");
 
     $clientList = null;
     while ($line = fgets($fp))
@@ -50,9 +142,42 @@ if($fp)
             $tableTemp[trim($var)] = trim($value);
         }
 
+        // Récupération des informations supplémentaires sur l'utilisateur
+        if(!empty($tableTemp['connection_client_ip']))
+        {
+            if(file_exists($path . 'alreadyScan' . '/ip.' . $tableTemp['clid'] . '.' . $tableTemp['connection_client_ip']) === FALSE)
+            {
+                // Récupération des données sur l'utilisateur (unique ID)
+                send("clientinfo clid=" . $tableTemp['clid']);
+
+                $infoUserList = null;
+                while ($line = fgets($fp))
+                {
+                        $infoUserList .= $line;
+                }
+
+                $infoUserListArray = explode(" ", $infoUserList);
+
+                // Construction du tableau avec les informations utilisateurs
+                foreach ($infoUserListArray as $txt)
+                {
+                    $var        = strstr($txt, '=', true);
+                    $value      = substr(strstr($txt, '=', false), 1);
+
+                    if($var == "client_unique_identifier")
+                    {
+                        $tableTemp[trim($var)] = trim($value);
+                        break;
+                    }
+                }
+
+                // END
+            }
+        }
+
         $clients[] = $tableTemp;
 
-        unset($tableTemp, $var, $value);
+        unset($tableTemp, $var, $value, $infoUserList, $infoUserListArray);
     }
 
     $ipList     = array();
@@ -86,84 +211,129 @@ if($fp)
         }
     }
 
+    // Calcul du pourcentage des utilisateurs en ligne sur le serveur TeamSpeak
+    $maxOnline              = $server['virtualserver_maxclients'];
+    $userOnline             = $server['virtualserver_clientsonline'];
+    $percentageUserOnline   = round(( $userOnline * 100 ) / $maxOnline);
+
     foreach ($clients as $line)
     {
-        if(!empty($line['connection_client_ip']))
+        // Auto reconnaissance des administrateurs
+        $isAnAdmin = false;
+        foreach ($adminID as $adminIDline)
         {
-            if(isAlreadyScan(0, (3600 * 24), $line['clid'] . '.' . $line['connection_client_ip']) === FALSE)
+            if(!empty($line['client_servergroups']))
             {
-                // Vérification du temps de connexion sur le serveur
-                /*
-                if($line['client_created'] > (60000 * 5))
+                if($line['client_servergroups'] == $adminIDline)
                 {
-                    echo $line['client_nickname'] . ' ->' . ' Utilisateur déjà scanné et trop vieux' . "\n";
-
-                    continue;
+                    $isAnAdmin = true;
+                    break;
                 }
-                */
+            }
+        }
 
-                // Intialisation des crédits pour l'utilisateur
-                $reason = array();
-                $credit = 0;
-                $kicked = false;
-
-                // Envoi du welcome message
-                send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("Bienvenue sur le serveur TeamSpeak. Votre adresse IP " . $line['connection_client_ip'] . " est vérifiée afin de vérifier la présence de VPN et de Proxy sur votre connexion Internet."));
-
-                // Scan de l'adresse IP de l'utilisateur
-                if(dnsBlacklist($line['connection_client_ip']))
+        if($isAnAdmin === false)
+        {
+            if(!empty($line['connection_client_ip']))
+            {
+                // AFK Protection
+                if($line['client_idle_time'] > ( 30 * 60000 ))
                 {
-                    $reason[] = 'Adresse IP contenue dans les DNSBL comme OpenProxy';
-                    $credit++;
+                    send("clientmove clid=" . $line['clid'] . " cid=24");
                 }
 
-                // Vérification de l'utilisateur dans la base RIPE (alloclist)
-                $alloclist = alloclist($line['connection_client_ip']);
-
-                if(empty($alloclist))
+                // AFK Auto-Kick
+                if($percentageUserOnline >= 80)
                 {
-                    $reason[] = 'Adresse IP non contenue dans la base de données alloclist (adresse IP non européenne)';
-                    $credit++;
-                } else
-                {
-                    send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("Informations de connexion trouvée : " . $alloclist . "."));
-                }
-
-                // Test si un pseudo est interdit
-                foreach ($nickNames as $value)
-                {
-                    if(preg_match("/" . $value . "/i", $line['client_nickname']))
+                    if($line['client_idle_time'] > ( ( 60 * 2 ) * 60000 ))
                     {
-                        $reason[] = 'Pseudonyme interdit (' . $value . ')';
+                        send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("Le serveur TeamSpeak est plein à " . $percentageUserOnline . " %, vous étiez absent depuis plus d'une heure alors nous vous avons éjecté sur serveur TeamSpeak afin de pouvoir libérer des slots. Merci pour votre compréhension."));
+                        send("clientkick clid=" . $line['clid'] . " reasonid=5 reasonmsg=" . textMessage("Absent pendant 2 heures ; Libération des slots automatiques
+                        "));
+                    }
+                }
+
+                // Vérification de la connexion
+                if(isAlreadyScan(0, (3600 * 24), $line['clid'] . '.' . $line['connection_client_ip']) === FALSE)
+                {
+                    // Vérification du temps de connexion sur le serveur
+                    /*
+                    if($line['client_created'] > (60000 * 5))
+                    {
+                        echo $line['client_nickname'] . ' ->' . ' Utilisateur déjà scanné et trop vieux' . "\n";
+
+                        continue;
+                    }
+                    */
+
+                    // Intialisation des crédits pour l'utilisateur
+                    $reason = array();
+                    $credit = 0;
+                    $kicked = false;
+
+                    // Initialisation des variables
+                    $client_unique_identifier   =   sha1($line['client_unique_identifier']);
+                    $f                          =   $path . 'users/' . $client_unique_identifier;
+
+                    // Envoi du welcome message
+                    send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("Bienvenue sur le serveur TeamSpeak. Votre adresse IP " . $line['connection_client_ip'] . " est vérifiée afin de trouver la présence éventuelle de VPN et de Proxy sur votre connexion Internet."));
+
+                    // Scan de l'adresse IP de l'utilisateur
+                    if(dnsBlacklist($line['connection_client_ip']))
+                    {
+                        $reason[] = 'Adresse IP contenue dans les DNSBL comme OpenProxy';
                         $credit++;
-                        $kicked = true;
                     }
-                }
 
-                if($credit == 0)
-                {
-                    send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("-- Nous n'avons trouvé aucun problème de sécurité sur votre connexion Internet."));
-                } else
-                {
-                    send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("-- Nous avons trouvé les problèmes suivants sur votre connexion Internet :"));
+                    // Vérification de l'utilisateur dans la base RIPE (alloclist)
+                    $alloclist = alloclist($line['connection_client_ip']);
 
-                    foreach ($reason as $value)
+                    if(empty($alloclist))
                     {
-                        send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("----> " . $value));
+                        $reason[] = 'Adresse IP non contenue dans la base de données alloclist (adresse IP non européenne)';
+                        $credit++;
+                    } else
+                    {
+                        //send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("Informations de connexion trouvée : " . $alloclist . "."));
                     }
-                }
 
-                if($credit > 1)
-                {
-                    send("clientkick clid=" . $line['clid'] . " reasonid=5 reasonmsg=" . textMessage('(C: ' . $credit . ') ' . $reason[0]));
-                }
+                    // Test si un pseudo est interdit
+                    foreach ($nickNames as $value)
+                    {
+                        if(preg_match("/" . $value . "/i", $line['client_nickname']))
+                        {
+                            $reason[] = 'Pseudonyme interdit (' . $value . ')';
+                            $credit++;
+                            $kicked = true;
+                        }
+                    }
 
-                if($kicked === TRUE)
-                {
-                    send("clientkick clid=" . $line['clid'] . " reasonid=5 reasonmsg=" . textMessage($reason[0]));
-                }
+                    if($credit == 0)
+                    {
+                        //send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("-- Nous n'avons trouvé aucun problème de sécurité sur votre connexion Internet."));
+                    } else
+                    {
+                        send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("-- Nous avons trouvé les problèmes suivants sur votre connexion Internet :"));
 
-                // END
+                        foreach ($reason as $value)
+                        {
+                            send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("----> " . $value));
+                        }
+                    }
+
+                    if($credit > 1)
+                    {
+                        send("banclient clid=" . $line['clid'] . " time=" . (60 * 20) . " banreason=" . textMessage('(C: ' . $credit . ') ' . $reason[0]));
+                        //send("clientkick clid=" . $line['clid'] . " reasonid=5 reasonmsg=" . textMessage('(C: ' . $credit . ') ' . $reason[0]));
+                    }
+
+                    if($kicked === TRUE)
+                    {
+                        send("clientkick clid=" . $line['clid'] . " reasonid=5 reasonmsg=" . textMessage($reason[0]));
+                    }
+
+                    // END
+                }
             }
         }
     }
@@ -220,7 +390,11 @@ function dnsBlacklist ($ip, $timeout = 1)
     $servers = array(
         "misc.dnsbl.sorbs.net",
         "socks.dnsbl.sorbs.net",
-        "misc.dnsbl.sorbs.net"
+        "misc.dnsbl.sorbs.net",
+        "cbl.abuseat.org",
+        "tor.dnsbl.sectoor.de",
+        "torexit.dan.me.uk",
+        "rbl.efnet.org"
     );
 
     foreach ($servers as $serverSel)
@@ -277,6 +451,7 @@ function alloclist ($ip)
                 $masque = long2ip($masque);
                 $date = substr($ligne, 6, 2)."/".substr($ligne, 4, 2)."/".substr($ligne, 0, 4);
                 $ripe = "$plage $date $proprietaire";
+
                 return $ripe;
             }
         } else
