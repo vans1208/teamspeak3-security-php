@@ -17,7 +17,8 @@ $nickNames = array(
     "bite",
     "grosse",
     "fils",
-    "enculé"
+    "enculé",
+    "emeute"
 );
 
 $adminID = array(
@@ -31,9 +32,9 @@ stream_set_timeout($fp, 0, 100000);
 
 if($fp)
 {
-    send("login <SERVER_ADMIN> <PASSWORD>");
+    send("login <LOGIN> <PASSWORD>");
     send("use sid=<SERVER_ID>");
-    send("clientupdate client_nickname=<CLIENT_NICKNAME>");
+    send("clientupdate client_nickname=<Nickname_Security>");
 
     // Mise à jour de la base de données alloclist
     $currentDate    = date('dmY');
@@ -63,18 +64,18 @@ if($fp)
 
                 if(file_exists($alloclistFilename))
                 {
-                    //send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Base de données alloclist mise à jour avec succès."));
+                    send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Base de données alloclist mise à jour avec succès."));
                 }
             } else
             {
-                //send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Erreur dans le téléchargement de la base de données du 'alloclist'. Mise à jour impossible."));
+                send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Erreur dans le téléchargement de la base de données du 'alloclist'. Mise à jour impossible."));
             }
 
             $file = fopen($path . '/' . 'update.txt', "w");
             fputs($file, $currentDate);
             fclose($file);
 
-            //send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Maintenance journalière terminée."));
+            send("sendtextmessage targetmode=3 target=1 msg=" . textMessage("Maintenance journalière terminée."));
         }
     } else
     {
@@ -83,133 +84,14 @@ if($fp)
         fclose($file);
     }
 
+    // Traitement des clients connectés sur le serveur TeamSpeak
+    $clients = getClients();
+
+    // Vérification des doubles connexions sur le serveur TeamSpeak (mêmes adresses IP)
+    checkDoubleConnections($clients);
+
     // Traitement des requêtes serveurs
-    send("serverinfo");
-
-    $clientList = null;
-    while ($line = fgets($fp))
-    {
-            $clientList .= $line;
-    }
-
-    $clientList         = strstr($clientList, "error id=0 msg=ok");
-    $clientList         = trim(str_replace(array('error id=0 msg=ok'), "", $clientList));
-    $clientsArray       = explode("|", $clientList);
-
-    $server = null;
-    foreach ($clientsArray as $line)
-    {
-        $lineArray = explode(" ", $line);
-
-        $tableTemp = array();
-        foreach ($lineArray as $txt)
-        {
-            $var        = strstr($txt, '=', true);
-            $value      = substr(strstr($txt, '=', false), 1);
-
-            $tableTemp[trim($var)] = trim($value);
-        }
-
-        $server = $tableTemp;
-
-        unset($tableTemp, $var, $value);
-    }
-
-    // Traitement des clients
-    send("clientlist -ip -times -groups -info");
-
-    $clientList = null;
-    while ($line = fgets($fp))
-    {
-            $clientList .= $line;
-    }
-
-    $clientList         = strstr($clientList, "error id=0 msg=ok");
-    $clientList         = trim(str_replace(array('error id=0 msg=ok'), "", $clientList));
-    $clientsArray       = explode("|", $clientList);
-
-    $clients = array();
-    foreach ($clientsArray as $line)
-    {
-        $lineArray = explode(" ", $line);
-
-        $tableTemp = array();
-        foreach ($lineArray as $txt)
-        {
-            $var        = strstr($txt, '=', true);
-            $value      = substr(strstr($txt, '=', false), 1);
-
-            $tableTemp[trim($var)] = trim($value);
-        }
-
-        // Récupération des informations supplémentaires sur l'utilisateur
-        if(!empty($tableTemp['connection_client_ip']))
-        {
-            if(file_exists($path . 'alreadyScan' . '/ip.' . $tableTemp['clid'] . '.' . $tableTemp['connection_client_ip']) === FALSE)
-            {
-                // Récupération des données sur l'utilisateur (unique ID)
-                send("clientinfo clid=" . $tableTemp['clid']);
-
-                $infoUserList = null;
-                while ($line = fgets($fp))
-                {
-                        $infoUserList .= $line;
-                }
-
-                $infoUserListArray = explode(" ", $infoUserList);
-
-                // Construction du tableau avec les informations utilisateurs
-                foreach ($infoUserListArray as $txt)
-                {
-                    $var        = strstr($txt, '=', true);
-                    $value      = substr(strstr($txt, '=', false), 1);
-
-                    if($var == "client_unique_identifier")
-                    {
-                        $tableTemp[trim($var)] = trim($value);
-                        break;
-                    }
-                }
-
-                // END
-            }
-        }
-
-        $clients[] = $tableTemp;
-
-        unset($tableTemp, $var, $value, $infoUserList, $infoUserListArray);
-    }
-
-    $ipList     = array();
-    $clidList   = array();
-    $collectionList = array();
-    foreach ($clients as $line)
-    {
-        if(!empty($line['connection_client_ip']))
-        {
-            $ipList[]   = $line['connection_client_ip'];
-            $clidList[] = $line['clid'];
-
-            $collectionList[] = array(
-                "clid"      =>      $line['clid'],
-                "ip"        =>      $line['connection_client_ip']
-            );
-        }
-    }
-
-    foreach (array_count_values($ipList) as $ip => $count)
-    {
-        if($count > 1)
-        {
-            foreach ($collectionList as $value)
-            {
-                if($value['ip'] == $ip)
-                {
-                    send("clientkick clid=" . $value['clid'] . " reasonid=5 reasonmsg=" . textMessage('Trop de connexions simultanées depuis la même adresse IP'));
-                }
-            }
-        }
-    }
+    $server = getServerInformation();
 
     // Calcul du pourcentage des utilisateurs en ligne sur le serveur TeamSpeak
     $maxOnline              = $server['virtualserver_maxclients'];
@@ -256,6 +138,9 @@ if($fp)
                 // Vérification de la connexion
                 if(isAlreadyScan(0, (3600 * 24), $line['clid'] . '.' . $line['connection_client_ip']) === FALSE)
                 {
+                    // Affichage d'un message en console
+                    echo $line['client_nickname'] . ' (groupID: ' . $line['client_servergroups'] . ') -> ' . 'Scanné.' . "\n";
+
                     // Vérification du temps de connexion sur le serveur
                     /*
                     if($line['client_created'] > (60000 * 5))
@@ -267,21 +152,38 @@ if($fp)
                     */
 
                     // Intialisation des crédits pour l'utilisateur
-                    $reason = array();
-                    $credit = 0;
-                    $kicked = false;
+                    $reason     = array();
+                    $explain    = array();
+                    $credit     = 0;
+                    $kicked     = false;
 
                     // Initialisation des variables
                     $client_unique_identifier   =   sha1($line['client_unique_identifier']);
                     $f                          =   $path . 'users/' . $client_unique_identifier;
 
+                    // Ignore les utilisateurs via les identifiants
+                    if(file_exists($path . 'exception/' . $client_unique_identifier))
+                    {
+                        echo $line['client_nickname'] . ' (groupID: ' . $line['client_servergroups'] . ') -> ' . 'Ignoré.' . "\n";
+
+                        continue;
+                    }
+
                     // Envoi du welcome message
-                    send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("Bienvenue sur le serveur TeamSpeak. Votre adresse IP " . $line['connection_client_ip'] . " est vérifiée afin de trouver la présence éventuelle de VPN et de Proxy sur votre connexion Internet."));
+                    //send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("Bienvenue sur le serveur TeamSpeak. Votre adresse IP " . $line['connection_client_ip'] . " est vérifiée afin de trouver la présence éventuelle de VPN et de Proxy sur votre connexion Internet."));
+
+                    // Vérification si l'utilisateur est en auto-ban
+                    if($line['client_servergroups'] == 37)
+                    {
+                        $reason[] = 'Trolleur identifié';
+                        $credit = 100;
+                    }
 
                     // Scan de l'adresse IP de l'utilisateur
                     if(dnsBlacklist($line['connection_client_ip']))
                     {
-                        $reason[] = 'Adresse IP contenue dans les DNSBL comme OpenProxy';
+                        $reason[] = 'Adresse IP contenue dans les DNSBL comme OpenProxy/OpenVPN';
+                        $explain[] = "Si vous voyez le message (adresse IP contenue dans les DNSBL), c'est que vous utilisez un proxy, un VPN ou que votre adresse IP est connue pour envoyer du spam. Nous vous invitons à vérifier que vos ordinateurs/réseaux ne sont pas infectés par un virus.";
                         $credit++;
                     }
 
@@ -291,18 +193,17 @@ if($fp)
                     if(empty($alloclist))
                     {
                         $reason[] = 'Adresse IP non contenue dans la base de données alloclist (adresse IP non européenne)';
+                        $explain[] = "Votre adresse IP n'est pas contenue dans la base de données des adresses IP attribuée par l'organisation RIPE. En conclusion, vous êtes en dehors de l'Europe.";
                         $credit++;
-                    } else
-                    {
-                        //send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("Informations de connexion trouvée : " . $alloclist . "."));
                     }
 
                     // Test si un pseudo est interdit
                     foreach ($nickNames as $value)
                     {
-                        if(preg_match("/" . $value . "/i", $line['client_nickname']))
+                        if(preg_match("/" . $value . "/i", accentDelete($line['client_nickname'])))
                         {
                             $reason[] = 'Pseudonyme interdit (' . $value . ')';
+                            $explain[] = "Le pseudonyme " . $value . " est interdit sur ce serveur TeamSpeak. Merci de le changer et de vous reconnecter.";
                             $credit++;
                             $kicked = true;
                         }
@@ -319,17 +220,21 @@ if($fp)
                         {
                             send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage("----> " . $value));
                         }
+
+                        foreach ($explain as $value)
+                        {
+                            send("sendtextmessage targetmode=1 target=" . $line['clid'] . " msg=" . textMessage('--> ' . $value));
+                        }
                     }
 
                     if($credit > 1)
                     {
-                        send("banclient clid=" . $line['clid'] . " time=" . (60 * 20) . " banreason=" . textMessage('(C: ' . $credit . ') ' . $reason[0]));
-                        //send("clientkick clid=" . $line['clid'] . " reasonid=5 reasonmsg=" . textMessage('(C: ' . $credit . ') ' . $reason[0]));
+                        kick($line['clid'], $line['connection_client_ip'], '(C: ' . $credit . ') ' . $reason[0]);
                     }
 
                     if($kicked === TRUE)
                     {
-                        send("clientkick clid=" . $line['clid'] . " reasonid=5 reasonmsg=" . textMessage($reason[0]));
+                        kick($line['clid'], $line['connection_client_ip'], '(C: ' . $credit . ') ' . $reason[0]);
                     }
 
                     // END
@@ -340,6 +245,10 @@ if($fp)
 
     send("quit");
 }
+
+/**
+ * Fonctions du programme
+ */
 
 function isAlreadyScan ($credit, $timeout, $data)
 {
@@ -418,6 +327,152 @@ function dnsBlacklist ($ip, $timeout = 1)
     return false;
 }
 
+function checkDoubleConnections ($clients)
+{
+    global $fp;
+
+    $ipList     = array();
+    $clidList   = array();
+    $collectionList = array();
+    foreach ($clients as $line)
+    {
+        if(!empty($line['connection_client_ip']))
+        {
+            $ipList[]   = $line['connection_client_ip'];
+            $clidList[] = $line['clid'];
+
+            $collectionList[] = array(
+                "clid"      =>      $line['clid'],
+                "ip"        =>      $line['connection_client_ip']
+            );
+        }
+    }
+
+    foreach (array_count_values($ipList) as $ip => $count)
+    {
+        if($count > 1)
+        {
+            foreach ($collectionList as $value)
+            {
+                if($value['ip'] == $ip)
+                {
+                    kick($value['clid'], $ip, 'Trop de connexions simultanées depuis la même adresse IP', true);
+                }
+            }
+        }
+    }
+}
+
+function getClients ()
+{
+    global $fp, $path;
+
+    // Traitement des clients
+    send("clientlist -ip -times -groups -info");
+
+    $clientList = null;
+    while ($line = fgets($fp))
+    {
+            $clientList .= $line;
+    }
+
+    $clientList         = strstr($clientList, "error id=0 msg=ok");
+    $clientList         = trim(str_replace(array('error id=0 msg=ok'), "", $clientList));
+    $clientsArray       = explode("|", $clientList);
+
+    $clients = array();
+    foreach ($clientsArray as $line)
+    {
+        $lineArray = explode(" ", $line);
+
+        $tableTemp = array();
+        foreach ($lineArray as $txt)
+        {
+            $var        = strstr($txt, '=', true);
+            $value      = substr(strstr($txt, '=', false), 1);
+
+            $tableTemp[trim($var)] = trim($value);
+        }
+
+        // Récupération des informations supplémentaires sur l'utilisateur
+        if(!empty($tableTemp['connection_client_ip']))
+        {
+            if(file_exists($path . 'alreadyScan' . '/ip.' . $tableTemp['clid'] . '.' . $tableTemp['connection_client_ip']) === FALSE)
+            {
+                // Récupération des données sur l'utilisateur (unique ID)
+                send("clientinfo clid=" . $tableTemp['clid']);
+
+                $infoUserList = null;
+                while ($line = fgets($fp))
+                {
+                        $infoUserList .= $line;
+                }
+
+                $infoUserListArray = explode(" ", $infoUserList);
+
+                // Construction du tableau avec les informations utilisateurs
+                foreach ($infoUserListArray as $txt)
+                {
+                    $var        = strstr($txt, '=', true);
+                    $value      = substr(strstr($txt, '=', false), 1);
+
+                    if($var == "client_unique_identifier")
+                    {
+                        $tableTemp[trim($var)] = trim($value);
+                        break;
+                    }
+                }
+
+                // END
+            }
+        }
+
+        $clients[] = $tableTemp;
+
+        unset($tableTemp, $var, $value, $infoUserList, $infoUserListArray, $clientList);
+    }
+
+    return $clients;
+}
+
+function getServerInformation ()
+{
+    global $fp;
+
+    send("serverinfo");
+
+    $server = null;
+    $serverList = null;
+    while ($line = fgets($fp))
+    {
+            $serverList .= $line;
+    }
+
+    $serverList         = trim(str_replace(array('error id=0 msg=ok'), "", $serverList));
+    $serverArray        = explode("|", $serverList);
+
+    $server = null;
+    foreach ($serverArray as $line)
+    {
+        $lineArray = explode(" ", $line);
+
+        $tableTemp = array();
+        foreach ($lineArray as $txt)
+        {
+            $var        = strstr($txt, '=', true);
+            $value      = substr(strstr($txt, '=', false), 1);
+
+            $tableTemp[trim($var)] = trim($value);
+        }
+
+        $server = $tableTemp;
+
+        unset($tableTemp, $var, $value);
+    }
+
+    return $server;
+}
+
 function alloclist ($ip)
 {
     global $path;
@@ -458,6 +513,80 @@ function alloclist ($ip)
         {
             if(substr($ligne, 2, 1) == ".") $proprietaire = trim($tableau[$i + 1])." $ligne";
         }
+    }
+}
+
+function accentDelete ($str)
+{
+    $str = strtr($str, 'ÁÀÂÄÃÅÇÉÈÊËÍÏÎÌÑÓÒÔÖÕÚÙÛÜÝ', 'AAAAAACEEEEEIIIINOOOOOUUUUY');
+    $str = strtr($str, 'áàâäãåçéèêëíìîïñóòôöõúùûüýÿ', 'aaaaaaceeeeiiiinooooouuuuyy');
+
+    return $str;
+}
+
+function AntiFlood ($credit, $timeout, $data)
+{
+    global $path;
+
+	$rep = $path . "count/";
+	$f = $path . 'count/' . '/ip.' . $data;
+
+	$dir = opendir($rep);
+
+	while ($fread = readdir($dir))
+	{
+		if($fread != "." && $fread != "..")
+		{
+			if(filemtime($rep . '/' . $fread) + $timeout < time())
+			{
+				unlink($rep . '/' . $fread);
+			}
+		}
+	}
+
+	if(file_exists($f))
+	{
+		$c = file($f);
+		$c = $c[0];
+	} else
+	{
+		$fp = fopen($f, "w");
+		fputs($fp, $credit);
+		fclose($fp);
+		$c = $credit;
+	}
+
+	$c--;
+
+	$fp = fopen($f, "w");
+	fputs($fp, $c);
+	fclose($fp);
+
+	if($c < 0)
+	{
+		return TRUE;
+	}
+}
+
+function kick ($clid, $ip, $reason, $onlyKick = false)
+{
+    global $fp;
+
+    if($onlyKick === TRUE)
+    {
+        send("clientkick clid=" . $clid . " reasonid=5 reasonmsg=" . textMessage($reason));
+
+        return 0;
+    }
+
+    if(AntiFlood(3, (3600 * 24), $ip) === TRUE)
+    {
+        send("sendtextmessage targetmode=1 target=" . $clid . " msg=" . textMessage("ATTENTION : Vous avez été banni du serveur pour récidive !"));
+        send("banclient clid=" . $clid . " time=" . (60 * 60) . " banreason=" . textMessage($reason));
+    } else
+    {
+        send("sendtextmessage targetmode=1 target=" . $clid . " msg=" . textMessage("ATTENTION : Vous avez éjecté du serveur et ceci est le *Premier avertissement* !"));
+        send("clientkick clid=" . $clid . " reasonid=5 reasonmsg=" . textMessage($reason));
     }
 }
 
